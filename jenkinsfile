@@ -1,0 +1,68 @@
+pipeline
+{
+	agent any
+	stages
+	{
+		stage('Checkout')
+		{
+			steps
+			{
+				git 'https://github.com/HamzaF3366/IGP_Project.git'
+			}
+		}
+		
+		stage('Compile')
+		{
+			steps
+			{
+				sh 'mvn compile'
+			}
+		}
+
+		stage('Test')
+		{
+			steps
+			{
+				sh 'mvn test'
+			}
+		}
+
+		stage('Build')
+		{
+			steps
+			{
+				sh 'mvn package'
+			}
+		}
+		
+		stage('Build Docker Image')
+		{
+			steps
+			{
+			    sh 'cp /var/lib/jenkins/workspace/$JOB_NAME/target/ABCtechnologies-1.0.war /var/lib/jenkins/workspace/$JOB_NAME/'
+				sh 'docker build -t abctechnologies:$BUILD_NUMBER .'
+				sh 'docker tag abctechnologies:$BUILD_NUMBER hamza3366/abctechnologies:$BUILD_NUMBER'
+			}
+		}
+
+		stage('Push Docker Image')
+		{ 
+			steps
+			{   
+			    withDockerRegistry([ credentialsId: "mydockerhubcred", url: "" ])
+			    {
+			       sh 'docker push hamza3366/abctechnologies:$BUILD_NUMBER'
+			    }
+			}
+		}
+
+		stage('Deploy as container')
+		{
+			steps
+			{
+				sh 'docker run -itd -P hamza3366/abctechnologies:$BUILD_NUMBER'
+			}
+		}   
+	}
+		
+}
