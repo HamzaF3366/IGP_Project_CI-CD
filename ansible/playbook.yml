@@ -1,0 +1,35 @@
+- hosts: all
+  become: yes
+  tasks:
+    - name: Install Docker
+      apt:
+        name: docker.io
+        state: present
+        update_cache: yes
+
+    - name: Install kubeadm, kubelet, kubectl
+      apt:
+        name: "{{ item }}"
+        state: present
+        update_cache: yes
+      loop:
+        - kubeadm
+        - kubelet
+        - kubectl
+
+- hosts: master
+  become: yes
+  tasks:
+    - name: Initialize Kubernetes master
+      shell: kubeadm init --pod-network-cidr=10.244.0.0/16
+
+    - name: Setup kube config for ubuntu user
+      command: "{{ item }}"
+      with_items:
+        - mkdir -p /home/ubuntu/.kube
+        - cp -i /etc/kubernetes/admin.conf /home/ubuntu/.kube/config
+        - chown ubuntu:ubuntu /home/ubuntu/.kube/config
+
+    - name: Install Flannel CNI
+      become: false
+      command: kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml

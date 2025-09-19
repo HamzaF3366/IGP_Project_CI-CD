@@ -1,0 +1,5 @@
+target/
+terraform/terraform.tfstate*
+ansible/inventory.ini
+*.log
+*.pyc

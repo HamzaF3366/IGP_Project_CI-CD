@@ -1,68 +1,111 @@
-pipeline
-{
-	agent any
-	stages
-	{
-		stage('Checkout')
-		{
-			steps
+pipeline {
+  agent any
+  environment {
+    PROJECT_ID = 'bright-airport-463914-a8'
+    REGION     = 'europe-west10'          // Berlin region
+    ZONE       = 'europe-west10-a'
+    IMAGE_NAME = 'hamza3366/abctechnologies'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps
 			{
 				git 'https://github.com/HamzaF3366/IGP_Project.git'
 			}
-		}
-		
-		stage('Compile')
-		{
+    }
+
+		stage('Compile'){
 			steps
 			{
 				sh 'mvn compile'
 			}
 		}
 
-		stage('Test')
-		{
+		stage('Test'){
 			steps
 			{
 				sh 'mvn test'
 			}
 		}
 
-		stage('Build')
-		{
+		stage('Build'){
 			steps
 			{
 				sh 'mvn package'
 			}
 		}
-		
-		stage('Build Docker Image')
-		{
-			steps
-			{
-			    sh 'cp /var/lib/jenkins/workspace/$JOB_NAME/target/ABCtechnologies-1.0.war /var/lib/jenkins/workspace/$JOB_NAME/'
-				sh 'docker build -t abctechnologies:$BUILD_NUMBER .'
-				sh 'docker tag abctechnologies:$BUILD_NUMBER hamza3366/abctechnologies:$BUILD_NUMBER'
-			}
-		}
 
-		stage('Push Docker Image')
-		{ 
-			steps
-			{   
-			    withDockerRegistry([ credentialsId: "mydockerhubcred", url: "" ])
-			    {
-			       sh 'docker push hamza3366/abctechnologies:$BUILD_NUMBER'
-			    }
-			}
-		}
+    stage('Build & Push Docker image') {
+      steps {
+        script {
+          def imageTag = "${IMAGE_NAME}:${env.BUILD_NUMBER}"
+          withDockerRegistry([ credentialsId: "mydockerhubcred", url: "" ]){
+            sh 'echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin'
+            sh "docker build -t ${imageTag} ."
+            sh "docker push ${imageTag}"
+          }
+        }
+      }
+    }
 
-		stage('Deploy as container')
-		{
-			steps
-			{
-				sh 'docker run -itd -P hamza3366/abctechnologies:$BUILD_NUMBER'
-			}
-		}   
-	}
-		
+    stage('Terraform: create VMs') {
+      steps {
+        withCredentials([file(credentialsId: 'gcp-service-account', variable: 'GCP_SA')]) {
+          sh '''
+            export GOOGLE_APPLICATION_CREDENTIALS=$GCP_SA
+            cd terraform
+            terraform init -input=false
+            terraform apply -auto-approve -input=false \
+              -var "project=${PROJECT_ID}" \
+              -var "region=${REGION}" \
+              -var "zone=${ZONE}" \
+              -var "jenkins_ssh_pub=${JENKINS_SSH_PUB}"
+            terraform output -json > ../terraform_outputs.json
+            cd ..
+          '''
+        }
+      }
+    }
+
+    stage('Ansible: configure k8s cluster') {
+      steps {
+        withCredentials([sshUserPrivateKey(credentialsId: 'jenkins_ssh_key', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
+          sh '''
+            python3 - <<'PY'
+            import json
+            j=json.load(open('terraform_outputs.json'))
+            master=j['master_public_ip']['value']
+            worker=j['worker_public_ip']['value']
+            inv = f"[master]\\n{master} ansible_user=ubuntu\\n\\n[workers]\\n{worker} ansible_user=ubuntu\\n\\n[all:vars]\\nansible_python_interpreter=/usr/bin/python3\\n"
+            open('ansible/inventory.ini','w').write(inv)
+            PY
+            ansible-playbook -i ansible/inventory.ini ansible/playbook.yml --private-key $SSH_KEY -u $SSH_USER -v
+          '''
+        }
+      }
+    }
+
+    stage('Deploy Application on Kubernetes') {
+      steps {
+        withCredentials([sshUserPrivateKey(credentialsId: 'jenkins_ssh_key', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
+            sh '''
+                MASTER_IP=$(python3 -c "import json;print(__import__('json').load(open('terraform_outputs.json'))['master_public_ip']['value'])")
+
+                ssh -o StrictHostKeyChecking=no -i $SSH_KEY $SSH_USER@$MASTER_IP "sudo cat /etc/kubernetes/admin.conf" > admin.conf
+                export KUBECONFIG=$PWD/admin.conf
+
+                kubectl apply -f k8s/deployment.yml.template
+                kubectl apply -f k8s/service.yml
+
+                kubectl set image deployment/abctechnologies abc=${IMAGE_NAME}:${BUILD_NUMBER} --record
+            '''
+        }
+      }
+    }
+  }
+
+  post {
+    always { archiveArtifacts artifacts: 'target/*.war', fingerprint: true }
+  }
 }
