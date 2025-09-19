@@ -41,7 +41,7 @@ pipeline {
         script {
           def imageTag = "${IMAGE_NAME}:${env.BUILD_NUMBER}"
           withDockerRegistry([ credentialsId: "mydockerhubcred", url: "" ]){
-            sh 'echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin'
+            sh 'cp /var/lib/jenkins/workspace/$JOB_NAME/target/ABCtechnologies-1.0.war /var/lib/jenkins/workspace/$JOB_NAME/'
             sh "docker build -t ${imageTag} ."
             sh "docker push ${imageTag}"
           }
