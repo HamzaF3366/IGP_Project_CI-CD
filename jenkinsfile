@@ -95,7 +95,7 @@ pipeline {
                 ssh -o StrictHostKeyChecking=no -i $SSH_KEY $SSH_USER@$MASTER_IP "sudo cat /etc/kubernetes/admin.conf" > admin.conf
                 export KUBECONFIG=$PWD/admin.conf
 
-                kubectl apply -f k8s/deployment.yml.template
+                kubectl apply -f k8s/deployment.yml
                 kubectl apply -f k8s/service.yml
 
                 kubectl set image deployment/abctechnologies abc=${IMAGE_NAME}:${BUILD_NUMBER} --record
