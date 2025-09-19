@@ -27,3 +27,8 @@ variable "vm_count" {
   type    = number
   default = 2
 }
+
+# Jenkins will pass the public key string into this variable
+variable "jenkins_ssh_pub" {
+  type = string
+}

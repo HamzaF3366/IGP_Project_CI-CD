@@ -41,7 +41,7 @@ pipeline {
         script {
           def imageTag = "${IMAGE_NAME}:${env.BUILD_NUMBER}"
           withDockerRegistry([ credentialsId: "mydockerhubcred", url: "" ]){
-            sh 'cp /var/lib/jenkins/workspace/$JOB_NAME/target/ABCtechnologies-1.0.war /var/lib/jenkins/workspace/$JOB_NAME/'
+            sh 'echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin'
             sh "docker build -t ${imageTag} ."
             sh "docker push ${imageTag}"
           }
@@ -49,15 +49,19 @@ pipeline {
       }
     }
 
-    stage('Terraform: create VMs') {
+    stage('Terraform: Create GCP VMs') {
       steps {
-        withCredentials([file(credentialsId: 'gcp-service-account', variable: 'GCP_SA')]) {
+        withCredentials([
+          file(credentialsId: 'gcp-service-account', variable: 'GCP_SA'),
+          string(credentialsId: 'jenkins_ssh_pub', variable: 'JENKINS_SSH_PUB')
+        ]) {
           sh '''
             export GOOGLE_APPLICATION_CREDENTIALS=$GCP_SA
             cd terraform
             terraform init -input=false
+            # pass variables with names exactly matching variables.tf
             terraform apply -auto-approve -input=false \
-              -var "project=${PROJECT_ID}" \
+              -var "project_id=${PROJECT_ID}" \
               -var "region=${REGION}" \
               -var "zone=${ZONE}" \
               -var "jenkins_ssh_pub=${JENKINS_SSH_PUB}"
@@ -66,7 +70,8 @@ pipeline {
           '''
         }
       }
-    }
+}
+
 
     stage('Ansible: configure k8s cluster') {
       steps {
