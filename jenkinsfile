@@ -60,6 +60,7 @@ pipeline {
             cd terraform
             terraform init -input=false
             # pass variables with names exactly matching variables.tf
+            echo ">>> Running: terraform apply -var project_id=${PROJECT_ID} -var region=${REGION} -var zone=${ZONE} -var jenkins_ssh_pub=${JENKINS_SSH_PUB}"
             terraform apply -auto-approve -input=false \
               -var "project_id=${PROJECT_ID}" \
               -var "region=${REGION}" \
