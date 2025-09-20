@@ -10,7 +10,7 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                git 'https://github.com/HamzaF3366/IGP_Project.git'
+                git 'https://github.com/HamzaF3366/IGP_Project_CI-CD.git'
             }
         }
 
