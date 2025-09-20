@@ -51,26 +51,26 @@ pipeline {
 
     stage('Terraform: Create GCP VMs') {
       steps {
-        withCredentials([
-          file(credentialsId: 'gcp-service-account', variable: 'GCP_SA'),
-          string(credentialsId: 'jenkins_ssh_pub', variable: 'JENKINS_SSH_PUB')
-        ]) {
-          sh '''
-            export GOOGLE_APPLICATION_CREDENTIALS=$GCP_SA
-            cd terraform
-            terraform init -input=false
-            # pass variables with names exactly matching variables.tf
-            echo ">>> Running: terraform apply -var project_id=${PROJECT_ID} -var region=${REGION} -var zone=${ZONE} -var jenkins_ssh_pub=${JENKINS_SSH_PUB}"
-            terraform apply -auto-approve -input=false \
-              -var "project_id=${PROJECT_ID}" \
-              -var "region=${REGION}" \
-              -var "zone=${ZONE}" \
-              -var "jenkins_ssh_pub=${JENKINS_SSH_PUB}"
-            terraform output -json > ../terraform_outputs.json
-            cd ..
-          '''
-        }
-      }
+              withCredentials([
+                file(credentialsId: 'gcp-service-account', variable: 'GCP_SA')
+              ]) {
+                sh '''
+                  export GOOGLE_APPLICATION_CREDENTIALS=$GCP_SA
+                  cd terraform
+                  terraform init -input=false
+                  # read the PUBLIC key from Jenkins node
+                  PUB_KEY=$(cat /root/.ssh/id_rsa.pub)
+                  echo ">>> Running: terraform apply -var project_id=${PROJECT_ID} -var region=${REGION} -var zone=${ZONE}"
+                  terraform apply -auto-approve -input=false \
+                    -var "project_id=${PROJECT_ID}" \
+                    -var "region=${REGION}" \
+                    -var "zone=${ZONE}" \
+                    -var "jenkins_ssh_pub=$PUB_KEY"
+                  terraform output -json > ../terraform_outputs.json
+                  cd ..
+                '''
+              }
+            }
 }
 
 
@@ -79,13 +79,27 @@ pipeline {
         withCredentials([sshUserPrivateKey(credentialsId: 'jenkins_ssh_key', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
           sh '''
             python3 - <<'PY'
-            import json
-            j=json.load(open('terraform_outputs.json'))
-            master=j['master_public_ip']['value']
-            worker=j['worker_public_ip']['value']
-            inv = f"[master]\\n{master} ansible_user=ubuntu\\n\\n[workers]\\n{worker} ansible_user=ubuntu\\n\\n[all:vars]\\nansible_python_interpreter=/usr/bin/python3\\n"
-            open('ansible/inventory.ini','w').write(inv)
-            PY
+import json
+
+# Load Terraform outputs
+j = json.load(open('terraform_outputs.json'))
+master_ip = j['master_public_ip']['value']
+worker_ip = j['worker_public_ip']['value']
+
+# Build Ansible inventory
+inv = f"""[master]
+{master_ip} ansible_user=ubuntu
+
+[workers]
+{worker_ip} ansible_user=ubuntu
+
+[all:vars]
+ansible_python_interpreter=/usr/bin/python3
+"""
+open('ansible/inventory.ini','w').write(inv)
+PY
+
+            # Run Ansible playbook using private key from Jenkins credentials
             ansible-playbook -i ansible/inventory.ini ansible/playbook.yml --private-key $SSH_KEY -u $SSH_USER -v
           '''
         }
@@ -95,21 +109,25 @@ pipeline {
     stage('Deploy Application on Kubernetes') {
       steps {
         withCredentials([sshUserPrivateKey(credentialsId: 'jenkins_ssh_key', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
-            sh '''
-                MASTER_IP=$(python3 -c "import json;print(__import__('json').load(open('terraform_outputs.json'))['master_public_ip']['value'])")
+          sh '''
+# Get master IP from Terraform outputs
+MASTER_IP=$(python3 -c "import json; print(__import__('json').load(open('terraform_outputs.json'))['master_public_ip']['value'])")
 
-                ssh -o StrictHostKeyChecking=no -i $SSH_KEY $SSH_USER@$MASTER_IP "sudo cat /etc/kubernetes/admin.conf" > admin.conf
-                export KUBECONFIG=$PWD/admin.conf
+# Fetch kubeconfig from master node
+ssh -o StrictHostKeyChecking=no -i $SSH_KEY $SSH_USER@$MASTER_IP "sudo cat /etc/kubernetes/admin.conf" > admin.conf
+export KUBECONFIG=$PWD/admin.conf
 
-                kubectl apply -f k8s/deployment.yml
-                kubectl apply -f k8s/service.yml
+# Deploy Kubernetes resources
+kubectl apply -f k8s/deployment.yml
+kubectl apply -f k8s/service.yml
 
-                kubectl set image deployment/abctechnologies abc=${IMAGE_NAME}:${BUILD_NUMBER} --record
-            '''
+# Update image for deployment
+kubectl set image deployment/abctechnologies abc=${IMAGE_NAME}:${BUILD_NUMBER} --record
+          '''
         }
       }
     }
-  }
+
 
   post {
     always { archiveArtifacts artifacts: 'target/*.war', fingerprint: true }
