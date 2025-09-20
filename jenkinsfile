@@ -5,6 +5,7 @@ pipeline {
         REGION     = 'europe-west10'          // Berlin region
         ZONE       = 'europe-west10-a'
         IMAGE_NAME = 'hamza3366/abctechnologies'
+        SSH_PUBLIC_KEY_PATH = "${env.HOME}/.ssh/id_rsa.pub" // safer dynamic path
     }
 
     stages {
@@ -47,21 +48,25 @@ pipeline {
 
         stage('Terraform: Create GCP VMs') {
             steps {
-                withCredentials([
-                    file(credentialsId: 'gcp-service-account', variable: 'GCP_SA')
-                ]) {
+                withCredentials([file(credentialsId: 'gcp-service-account', variable: 'GCP_SA')]) {
                     sh '''
                         export GOOGLE_APPLICATION_CREDENTIALS=$GCP_SA
                         cd terraform
                         terraform init -input=false
-                        # read the PUBLIC key from Jenkins node
-                        PUB_KEY=$(cat /root/.ssh/id_rsa.pub)
-                        echo ">>> Running: terraform apply -var project_id=${PROJECT_ID} -var region=${REGION} -var zone=${ZONE}"
+
+                        # Read public key safely
+                        if [ ! -f "$SSH_PUBLIC_KEY_PATH" ]; then
+                          echo "ERROR: Public key not found at $SSH_PUBLIC_KEY_PATH"
+                          exit 1
+                        fi
+                        PUB_KEY=$(cat "$SSH_PUBLIC_KEY_PATH")
+
                         terraform apply -auto-approve -input=false \
                             -var "project_id=${PROJECT_ID}" \
                             -var "region=${REGION}" \
                             -var "zone=${ZONE}" \
                             -var "jenkins_ssh_pub=$PUB_KEY"
+
                         terraform output -json > ../terraform_outputs.json
                         cd ..
                     '''
@@ -75,13 +80,10 @@ pipeline {
                     sh '''
                         python3 - <<'PY'
 import json
-
-# Load Terraform outputs
 j = json.load(open('terraform_outputs.json'))
 master_ip = j['master_public_ip']['value']
 worker_ip = j['worker_public_ip']['value']
 
-# Build Ansible inventory
 inv = f"""[master]
 {master_ip} ansible_user=ubuntu
 
@@ -93,8 +95,6 @@ ansible_python_interpreter=/usr/bin/python3
 """
 open('ansible/inventory.ini','w').write(inv)
 PY
-
-                        # Run Ansible playbook using private key from Jenkins credentials
                         ansible-playbook -i ansible/inventory.ini ansible/playbook.yml --private-key $SSH_KEY -u $SSH_USER -v
                     '''
                 }
@@ -105,29 +105,23 @@ PY
             steps {
                 withCredentials([sshUserPrivateKey(credentialsId: 'jenkins_ssh_key', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
                     sh '''
-                        # Get master IP from Terraform outputs
                         MASTER_IP=$(python3 -c "import json; print(__import__('json').load(open('terraform_outputs.json'))['master_public_ip']['value'])")
-
-                        # Fetch kubeconfig from master node
                         ssh -o StrictHostKeyChecking=no -i $SSH_KEY $SSH_USER@$MASTER_IP "sudo cat /etc/kubernetes/admin.conf" > admin.conf
                         export KUBECONFIG=$PWD/admin.conf
 
-                        # Deploy Kubernetes resources
                         kubectl apply -f k8s/deployment.yml
                         kubectl apply -f k8s/service.yml
 
-                        # Update image for deployment
                         kubectl set image deployment/abctechnologies abc=${IMAGE_NAME}:${BUILD_NUMBER} --record
                     '''
                 }
             }
         }
-
-    } // end of stages
+    }
 
     post {
         always {
             archiveArtifacts artifacts: 'target/*.war', fingerprint: true
         }
     }
-} // end of pipeline
+}
