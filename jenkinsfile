@@ -75,13 +75,33 @@ pipeline {
 
 stage('Ansible: configure k8s cluster') {
     steps {
-        withCredentials([sshUserPrivateKey(credentialsId: 'ssh-key-id', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
+        withCredentials([sshUserPrivateKey(credentialsId: 'jenkins_ssh_key', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
             sh '''
 chmod 600 $SSH_KEY
 export ANSIBLE_HOST_KEY_CHECKING=False
 
+# Load Terraform outputs
+MASTER_IP=$(python3 -c "import json; j=__import__('json').load(open('terraform_outputs.json')); print(j['master_public_ip']['value'])")
+WORKER_IPS=$(python3 -c "import json; j=__import__('json').load(open('terraform_outputs.json')); print(' '.join(j['worker_public_ips']['value']))")
+
+# Wait for master SSH
+until ssh -o StrictHostKeyChecking=no -i $SSH_KEY ubuntu@$MASTER_IP 'echo ok'; do
+    echo "Waiting for SSH on master ($MASTER_IP)..."
+    sleep 20
+done
+
+# Wait for worker SSHs
+for ip in $WORKER_IPS; do
+    until ssh -o StrictHostKeyChecking=no -i $SSH_KEY ubuntu@$ip 'echo ok'; do
+        echo "Waiting for SSH on worker ($ip)..."
+        sleep 10
+    done
+done
+
+# Generate Ansible inventory
 python3 ansible/generate_inventory.py
 
+# Run Ansible
 ansible-playbook -i ansible/inventory.ini ansible/playbook.yml \
   --private-key $SSH_KEY -u ubuntu -v \
   -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no"'
