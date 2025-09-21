@@ -38,7 +38,6 @@ pipeline {
                 script {
                     def imageTag = "${IMAGE_NAME}:${env.BUILD_NUMBER}"
                     withDockerRegistry([credentialsId: "mydockerhubcred", url: ""]) {
-                        sh 'echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin'
                         sh "docker build -t ${imageTag} ."
                         sh "docker push ${imageTag}"
                     }
@@ -74,50 +73,50 @@ pipeline {
             }
         }
 
-      stage('Ansible: configure k8s cluster') {
-          steps {
-              withCredentials([sshUserPrivateKey(credentialsId: 'jenkins_ssh_key', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
-                  sh '''
-                python3 - <<'PY'
-import json
+stage('Ansible: configure k8s cluster') {
+    steps {
+        withCredentials([sshUserPrivateKey(credentialsId: 'jenkins_ssh_key', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
+          sh '''
+              python3 - <<'PY'
+              import json
 
-# Load Terraform outputs
-j = json.load(open('terraform_outputs.json'))
-master_ip = j['master_internal_ip']['value']
-worker_ips = j['worker_internal_ips']['value']  # list of internal IPs
+              # Load Terraform outputs
+              j = json.load(open('terraform_outputs.json'))
+              master_ip = j['master_public_ip']['value']         # single public IP
+              worker_ips = j['worker_public_ips']['value']       # list of worker public IPs
 
-# Build worker entries for Ansible inventory
-worker_entries = "\n".join([f"{ip} ansible_user=ubuntu" for ip in worker_ips])
+              # Build worker entries for Ansible inventory
+              worker_entries = "\\n".join([f"{ip} ansible_user=ubuntu" for ip in worker_ips])
 
-# Build the Ansible inventory
-inv = f"""[master]
-{master_ip} ansible_user=ubuntu
+              # Build the Ansible inventory file
+              inv = f"""[master]
+              {master_ip} ansible_user=ubuntu
 
-[workers]
-{worker_entries}
+              [workers]
+              {worker_entries}
 
-[all:vars]
-ansible_python_interpreter=/usr/bin/python3
-"""
+              [all:vars]
+              ansible_python_interpreter=/usr/bin/python3
+              """
 
-with open('ansible/inventory.ini', 'w') as f:
-    f.write(inv)
-PY
+              with open('ansible/inventory.ini', 'w') as f:
+                  f.write(inv)
+              PY
 
-                 
-                chmod 600 $SSH_KEY
-                # Disable host key checking for automation
-                export ANSIBLE_HOST_KEY_CHECKING=False
+              # Secure the private key and disable host key checking
+              chmod 600 $SSH_KEY
+              export ANSIBLE_HOST_KEY_CHECKING=False
 
-                # Run Ansible playbook with ubuntu user
-                ansible-playbook -i ansible/inventory.ini ansible/playbook.yml \
-                  --private-key $SSH_KEY -u ubuntu -v \
-                  -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no"'
+              # Run the playbook against master + workers
+              ansible-playbook -i ansible/inventory.ini ansible/playbook.yml \
+                --private-key $SSH_KEY -u ubuntu -v \
+                -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no"'
+              '''
 
-            '''
         }
     }
 }
+
 
         stage('Deploy Application on Kubernetes') {
             steps {
