@@ -75,47 +75,21 @@ pipeline {
 
 stage('Ansible: configure k8s cluster') {
     steps {
-        withCredentials([sshUserPrivateKey(credentialsId: 'jenkins_ssh_key', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
-          sh '''
-              python3 - <<'PY'
-              import json
+        withCredentials([sshUserPrivateKey(credentialsId: 'ssh-key-id', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
+            sh '''
+chmod 600 $SSH_KEY
+export ANSIBLE_HOST_KEY_CHECKING=False
 
-              # Load Terraform outputs
-              j = json.load(open('terraform_outputs.json'))
-              master_ip = j['master_public_ip']['value']         # single public IP
-              worker_ips = j['worker_public_ips']['value']       # list of worker public IPs
+python3 ansible/generate_inventory.py
 
-              # Build worker entries for Ansible inventory
-              worker_entries = "\\n".join([f"{ip} ansible_user=ubuntu" for ip in worker_ips])
-
-              # Build the Ansible inventory file
-              inv = f"""[master]
-              {master_ip} ansible_user=ubuntu
-
-              [workers]
-              {worker_entries}
-
-              [all:vars]
-              ansible_python_interpreter=/usr/bin/python3
-              """
-
-              with open('ansible/inventory.ini', 'w') as f:
-                  f.write(inv)
-              PY
-
-              # Secure the private key and disable host key checking
-              chmod 600 $SSH_KEY
-              export ANSIBLE_HOST_KEY_CHECKING=False
-
-              # Run the playbook against master + workers
-              ansible-playbook -i ansible/inventory.ini ansible/playbook.yml \
-                --private-key $SSH_KEY -u ubuntu -v \
-                -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no"'
-              '''
-
+ansible-playbook -i ansible/inventory.ini ansible/playbook.yml \
+  --private-key $SSH_KEY -u ubuntu -v \
+  -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no"'
+'''
         }
     }
 }
+
 
 
         stage('Deploy Application on Kubernetes') {
