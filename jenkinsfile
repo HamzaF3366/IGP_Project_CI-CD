@@ -83,11 +83,11 @@ import json
 
 # Load Terraform outputs
 j = json.load(open('terraform_outputs.json'))
-master_ip = j['master_public_ip']['value']
-worker_ips = j['worker_public_ips']['value']  # Note: plural, list of IPs
+master_ip = j['master_internal_ip']['value']
+worker_ips = j['worker_internal_ips']['value']  # list of internal IPs
 
 # Build worker entries for Ansible inventory
-worker_entries = "\\n".join([f"{ip} ansible_user=ubuntu" for ip in worker_ips])
+worker_entries = "\n".join([f"{ip} ansible_user=ubuntu" for ip in worker_ips])
 
 # Build the Ansible inventory
 inv = f"""[master]
@@ -100,7 +100,6 @@ inv = f"""[master]
 ansible_python_interpreter=/usr/bin/python3
 """
 
-# Write inventory to file
 with open('ansible/inventory.ini', 'w') as f:
     f.write(inv)
 PY
@@ -114,6 +113,7 @@ PY
                 ansible-playbook -i ansible/inventory.ini ansible/playbook.yml \
                   --private-key $SSH_KEY -u ubuntu -v \
                   -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no"'
+
             '''
         }
     }

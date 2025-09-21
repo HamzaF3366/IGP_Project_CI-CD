@@ -37,7 +37,7 @@ resource "google_compute_firewall" "k8s_fw" {
     ]
   }
 
-  source_ranges = ["0.0.0.0/0"]
+  source_ranges = ["10.132.0.0/20"]
   target_tags   = ["k8s"]
 }
 
