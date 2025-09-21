@@ -104,8 +104,13 @@ ansible_python_interpreter=/usr/bin/python3
 with open('ansible/inventory.ini', 'w') as f:
     f.write(inv)
 PY
-                # Run Ansible playbook
-                ansible-playbook -i ansible/inventory.ini ansible/playbook.yml --private-key $SSH_KEY -u $SSH_USER -v
+                 # Disable host key checking for automation
+                export ANSIBLE_HOST_KEY_CHECKING=False
+
+                # Run Ansible playbook with ubuntu user
+                ansible-playbook -i ansible/inventory.ini ansible/playbook.yml \
+                  --private-key $SSH_KEY -u ubuntu -v \
+                  -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no"'
             '''
         }
     }
