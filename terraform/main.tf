@@ -39,7 +39,7 @@ resource "google_compute_firewall" "k8s_fw" {
 
   source_ranges = ["0.0.0.0/0"]
   target_tags   = ["k8s"]
-}}
+}
 
 resource "google_compute_instance" "k8s_vm" {
   count        = var.vm_count
