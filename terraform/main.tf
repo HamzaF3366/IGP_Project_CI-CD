@@ -15,7 +15,7 @@ provider "google" {
   # Authentication uses GOOGLE_APPLICATION_CREDENTIALS env var set by Jenkins
 }
 
-# Firewall to allow SSH + Kubernetes traffic on the default network
+# Firewall rule to allow SSH + Kubernetes traffic on the default network
 resource "google_compute_firewall" "allow_ssh_k8s" {
   name    = "allow-ssh-k8s"
   network = "default"
@@ -32,11 +32,13 @@ resource "google_compute_firewall" "allow_ssh_k8s" {
     ]
   }
 
-  # For testing open to all (restrict to Jenkins IP in production)
+  # For testing, open to all (⚠️ restrict to Jenkins IP/CIDR in production!)
   source_ranges = ["0.0.0.0/0"]
+
+  target_tags = ["k8s"]
 }
 
-# Create 2 Ubuntu VMs
+# Create N (default = 2) Ubuntu VMs for Kubernetes
 resource "google_compute_instance" "k8s_vm" {
   count        = var.vm_count
   name         = "k8s-vm-${count.index}"
@@ -52,13 +54,13 @@ resource "google_compute_instance" "k8s_vm" {
 
   network_interface {
     network = "default"
-    access_config {} # required for external/public IP
+    access_config {} # Required to assign an external/public IP
   }
 
   tags = ["k8s"]
 
   metadata = {
-    # Add Jenkins SSH public key to "ubuntu" user
+    # Inject Jenkins SSH public key into the "ubuntu" user
     ssh-keys = "${var.ssh_user}:${replace(var.jenkins_ssh_pub, "\n", "")}"
   }
 }
