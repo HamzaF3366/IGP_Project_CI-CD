@@ -104,7 +104,10 @@ ansible_python_interpreter=/usr/bin/python3
 with open('ansible/inventory.ini', 'w') as f:
     f.write(inv)
 PY
-                 # Disable host key checking for automation
+
+                 
+                chmod 600 $SSH_KEY
+                # Disable host key checking for automation
                 export ANSIBLE_HOST_KEY_CHECKING=False
 
                 # Run Ansible playbook with ubuntu user

@@ -26,12 +26,20 @@ resource "google_compute_firewall" "k8s_fw" {
 
   allow {
     protocol = "tcp"
-    ports    = ["22", "6443", "2379-2380", "10250", "10251", "10252", "30000-32767"]
+    ports    = [
+      "22",            # SSH
+      "80",            # HTTP
+      "443",           # HTTPS
+      "6443",          # Kubernetes API server
+      "2379-2380",     # etcd
+      "10250", "10251", "10252", # kubelet & control plane
+      "30000-32767"    # NodePort services
+    ]
   }
 
   source_ranges = ["0.0.0.0/0"]
   target_tags   = ["k8s"]
-}
+}}
 
 resource "google_compute_instance" "k8s_vm" {
   count        = var.vm_count
