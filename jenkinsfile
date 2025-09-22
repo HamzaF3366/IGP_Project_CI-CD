@@ -102,9 +102,10 @@ done
 python3 ansible/generate_inventory.py
 
 # Run Ansible
-ansible-playbook -i ansible/inventory.ini ansible/playbook.yml \
+  ansible-playbook -i ansible/inventory.ini ansible/playbook.yml \
   --private-key $SSH_KEY -u ubuntu -v \
-  -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no"'
+  -e 'ansible_ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"'
+
 '''
         }
     }
@@ -112,22 +113,35 @@ ansible-playbook -i ansible/inventory.ini ansible/playbook.yml \
 
 
 
-        stage('Deploy Application on Kubernetes') {
-            steps {
-                withCredentials([sshUserPrivateKey(credentialsId: 'jenkins_ssh_key', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
-                    sh '''
-                        MASTER_IP=$(python3 -c "import json; print(__import__('json').load(open('terraform_outputs.json'))['master_public_ip']['value'])")
-                        ssh -o StrictHostKeyChecking=no -i $SSH_KEY $SSH_USER@$MASTER_IP "sudo cat /etc/kubernetes/admin.conf" > admin.conf
-                        export KUBECONFIG=$PWD/admin.conf
+   stage('Deploy Application on Kubernetes') {
+    steps {
+        withCredentials([sshUserPrivateKey(credentialsId: 'jenkins_ssh_key', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
+            sh '''
+                MASTER_IP=$(python3 -c "import json; j=__import__('json').load(open('terraform_outputs.json')); print(j['master_public_ip']['value'])")
+                
+                # Wait for API server to be ready
+                until ssh -o StrictHostKeyChecking=no -i $SSH_KEY $SSH_USER@$MASTER_IP "sudo kubectl get nodes --kubeconfig /etc/kubernetes/admin.conf"; do
+                    echo "Waiting for Kubernetes API on master ($MASTER_IP)..."
+                    sleep 20
+                done
+                
+                # Deploy application directly via SSH on master
+                ssh -o StrictHostKeyChecking=no -i $SSH_KEY $SSH_USER@$MASTER_IP << 'EOF'
+                    export KUBECONFIG=/etc/kubernetes/admin.conf
 
-                        kubectl apply -f k8s/deployment.yml
-                        kubectl apply -f k8s/service.yml
+                    kubectl apply -f /home/ubuntu/workspace/IGP_Project_CI-CD/k8s/deployment.yml
+                    kubectl apply -f /home/ubuntu/workspace/IGP_Project_CI-CD/k8s/service.yml
 
-                        kubectl set image deployment/abctechnologies abc=${IMAGE_NAME}:${BUILD_NUMBER} --record
-                    '''
-                }
-            }
+                    kubectl set image deployment/abctechnologies abc=hamza3366/abctechnologies:${BUILD_NUMBER} --record
+
+                    echo "Current pods status:"
+                    kubectl get pods -o wide
+EOF
+            '''
         }
+    }
+}
+
     }
 
     post {
