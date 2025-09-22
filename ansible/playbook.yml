@@ -1,16 +1,10 @@
-# ansible/playbook.yml
 - hosts: all
   become: yes
-  vars:
-    # Change this if you want a different kubernetes version repo (v1.29 used here)
-    k8s_version_path: "core:/stable:/v1.29"
-    minimum_ready_nodes: 2          # number of Ready nodes expected (master + worker)
   tasks:
-    - name: Disable swap (required by kubeadm)
+    - name: Disable swap
       shell: |
         swapoff -a
         sed -i.bak '/ swap / s/^/#/' /etc/fstab
-      changed_when: true
 
     - name: Install base dependencies
       apt:
@@ -24,9 +18,7 @@
         state: present
         update_cache: yes
 
-    # ---------------------------
-    # Docker installation (idempotent)
-    # ---------------------------
+    # ---------------- Docker Setup ----------------
     - name: Add Docker GPG key
       apt_key:
         url: https://download.docker.com/linux/ubuntu/gpg
@@ -34,30 +26,23 @@
 
     - name: Add Docker repo
       apt_repository:
-        repo: "deb [arch={{ ansible_architecture }}] https://download.docker.com/linux/ubuntu {{ ansible_lsb.codename }} stable"
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
         state: present
         filename: docker
 
     - name: apt update (after adding docker repo)
       apt:
         update_cache: yes
-      when: ansible_facts.packages is not defined  # safe guard for idempotence
 
     - name: Install Docker packages
       apt:
         name:
-          - containerd.io
           - docker-ce
           - docker-ce-cli
+          - containerd
           - docker-compose-plugin
         state: present
         update_cache: yes
-
-    - name: Ensure Docker service is running and enabled
-      service:
-        name: docker
-        state: started
-        enabled: true
 
     - name: Add ubuntu user to docker group
       user:
@@ -65,24 +50,19 @@
         groups: docker
         append: yes
 
-    - name: Reset connection so new group membership is effective
-      meta: reset_connection
+    # ---------------- Kubernetes Setup ----------------
+    - name: Add Kubernetes GPG key
+      apt_key:
+        url: https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key
+        state: present
 
-    # ---------------------------
-    # Kubernetes apt repo (pkgs.k8s.io) - using shell to add key + list to avoid "no Release file" issues
-    # ---------------------------
-    - name: Add Kubernetes apt key + repo (pkgs.k8s.io v1.29)
-      shell: |
-        set -e
-        curl -fsSL https://pkgs.k8s.io/{{ k8s_version_path }}/deb/Release.key | gpg --dearmor -o /usr/share/keyrings/kubernetes-archive-keyring.gpg
-        echo "deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://pkgs.k8s.io/{{ k8s_version_path }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
-        apt-get update -q
-      args:
-        executable: /bin/bash
-      register: add_k8s_repo
-    # no args: warn to avoid unsupported param issues
+    - name: Add Kubernetes apt repo
+      apt_repository:
+        repo: "deb https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /"
+        state: present
+        filename: kubernetes
 
-    - name: Install kubelet kubeadm kubectl
+    - name: Install kubelet, kubeadm, kubectl
       apt:
         name:
           - kubelet
@@ -91,22 +71,19 @@
         state: present
         update_cache: yes
 
-    - name: Hold kube packages to prevent unintended upgrades
+    - name: Hold kube packages
       shell: apt-mark hold kubelet kubeadm kubectl
-      changed_when: false
 
 - hosts: master
   become: yes
   tasks:
-    - name: Initialize Kubernetes master with kubeadm
-      shell: |
-        kubeadm init --apiserver-advertise-address={{ ansible_host }} --pod-network-cidr=10.244.0.0/16
+    - name: Init Kubernetes master
+      shell: kubeadm init --apiserver-advertise-address={{ ansible_host }} --pod-network-cidr=10.244.0.0/16
       args:
-        executable: /bin/bash
+        warn: false
       register: kubeadm_init
-      failed_when: kubeadm_init.rc != 0 and 'already initialized' not in kubeadm_init.stderr
 
-    - name: Copy admin kubeconfig for ubuntu user
+    - name: Set kubeconfig for ubuntu user
       shell: |
         mkdir -p /home/ubuntu/.kube
         cp /etc/kubernetes/admin.conf /home/ubuntu/.kube/config
@@ -116,52 +93,16 @@
       shell: |
         export KUBECONFIG=/etc/kubernetes/admin.conf
         kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
-      args:
-        executable: /bin/bash
 
-    - name: Generate join command (print-join-command)
+    - name: Generate join command
       shell: kubeadm token create --print-join-command
       register: join_cmd
-      changed_when: false
 
-    - name: Save join command as fact
-      set_fact:
+    - set_fact:
         kube_join: "{{ join_cmd.stdout }}"
-
-    - name: Wait for control-plane to be healthy (kubectl get nodes returns at least 1)
-      shell: |
-        kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes --no-headers | awk '{print $2}' | grep -c Ready || true
-      register: control_ready
-      retries: 20
-      delay: 6
-      until: control_ready.stdout | int >= 1
 
 - hosts: workers
   become: yes
   tasks:
-    - name: Wait until master join command is available in hostvars
-      wait_for:
-        timeout: 180
-      when: hostvars[groups['master'][0]] is not none
-
     - name: Join worker to cluster
       shell: "{{ hostvars[groups['master'][0]]['kube_join'] }}"
-      args:
-        executable: /bin/bash
-
-- hosts: master
-  become: yes
-  tasks:
-    - name: Wait for all nodes to be Ready (minimum {{ minimum_ready_nodes }})
-      shell: |
-        kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes --no-headers | awk '{print $2}' | grep -c Ready || true
-      register: ready_count
-      retries: 30
-      delay: 10
-      until: ready_count.stdout | int >= minimum_ready_nodes
-
-    - name: Show nodes (final verification)
-      shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes -o wide
-      register: final_nodes
-    - debug:
-        var: final_nodes.stdout_lines
