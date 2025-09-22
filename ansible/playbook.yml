@@ -1,95 +1,103 @@
 - hosts: all
   become: yes
   tasks:
-    - name: disable swap
+    - name: Disable swap
       shell: |
         swapoff -a
         sed -i.bak '/ swap / s/^/#/' /etc/fstab
 
-    - name: install dependencies
-      apt:
-        name:
-          - apt-transport-https
-          - ca-certificates
-          - curl
-          - gnupg
-          - lsb-release
-          - software-properties-common
-        state: present
-        update_cache: yes
-
-    - name: install Docker
-      shell: |
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
-        apt-get update
-        apt-get remove -y containerd || true
-        apt-get install -y docker-ce docker-ce-cli containerd.io
-        usermod -aG docker ubuntu || true
-
-    - name: Ensure Docker service is running and enabled
-      service:
-        name: docker
-        state: started
-        enabled: true
-
-    - name: Allow ubuntu user to run docker without sudo
-      user:
-        name: ubuntu
-        groups: docker
-        append: yes
-
-    # Removed Jenkins restart for cluster nodes
-    - name: Reset ssh connection to apply new docker group membership
-      meta: reset_connection
-
-    - name: add Kubernetes apt repo
-      apt_key:
-        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
-        state: present
-
-    - apt_repository:
-        repo: deb https://apt.kubernetes.io/ kubernetes-xenial main
-        state: present
-
-    - name: install kubelet, kubeadm, kubectl
-      apt:
-        name: [kubelet, kubeadm, kubectl]
-        state: present
-        update_cache: yes
-
-    - name: hold kube packages
-      shell: apt-mark hold kubelet kubeadm kubectl
-
 - hosts: master
   become: yes
   tasks:
-    - name: init k8s master
-      shell: kubeadm init --apiserver-advertise-address={{ ansible_host }} --pod-network-cidr=10.244.0.0/16
-      args: { warn: false }
-      register: kubeadm_init
+    - name: Install Docker
+      shell: |
+        wget https://raw.githubusercontent.com/lerndevops/labs/master/scripts/installDocker.sh -P /tmp
+        chmod 755 /tmp/installDocker.sh
+        bash /tmp/installDocker.sh
+        systemctl restart docker.service
 
-    - name: set kubeconfig for ubuntu
+    - name: Install CRI-Docker
+      shell: |
+        wget https://raw.githubusercontent.com/lerndevops/labs/master/scripts/installCRIDockerd.sh -P /tmp
+        chmod 755 /tmp/installCRIDockerd.sh
+        bash /tmp/installCRIDockerd.sh
+        systemctl restart cri-docker.service
+
+    - name: Install kubeadm, kubelet, kubectl
+      shell: |
+        wget https://raw.githubusercontent.com/lerndevops/labs/master/scripts/installK8S.sh -P /tmp
+        chmod 755 /tmp/installK8S.sh
+        bash /tmp/installK8S.sh
+
+    - name: Validate installations
+      shell: |
+        docker -v
+        cri-dockerd --version
+        kubeadm version -o short
+        kubelet --version
+        kubectl version --client
+
+    - name: Initialize Kubernetes Master Node
+      shell: |
+        kubeadm init --cri-socket unix:///var/run/cri-dockerd.sock --ignore-preflight-errors=all
+      register: kubeadm_init
+      args:
+        warn: false
+
+    - name: Configure kubeconfig for ubuntu
       shell: |
         mkdir -p /home/ubuntu/.kube
-        cp /etc/kubernetes/admin.conf /home/ubuntu/.kube/config
+        cp -i /etc/kubernetes/admin.conf /home/ubuntu/.kube/config
         chown ubuntu:ubuntu /home/ubuntu/.kube/config
 
-    - name: install flannel CNI
+    - name: Install Calico networking
       shell: |
         export KUBECONFIG=/etc/kubernetes/admin.conf
-        kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
+        kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.24.1/manifests/calico.yaml
 
-    - name: generate join command
+    - name: Generate kubeadm join command
       shell: kubeadm token create --print-join-command
-      register: join_cmd
+      register: kube_join
 
     - set_fact:
-        kube_join: "{{ join_cmd.stdout }}"
+        kube_join_command: "{{ kube_join.stdout }} --cri-socket unix:///var/run/cri-dockerd.sock"
 
 - hosts: workers
   become: yes
   tasks:
-    - name: join worker to cluster
-      shell: "{{ hostvars[groups['master'][0]]['kube_join'] }}"
+    - name: Install Docker
+      shell: |
+        wget https://raw.githubusercontent.com/lerndevops/labs/master/scripts/installDocker.sh -P /tmp
+        chmod 755 /tmp/installDocker.sh
+        bash /tmp/installDocker.sh
+        systemctl restart docker.service
 
+    - name: Install CRI-Docker
+      shell: |
+        wget https://raw.githubusercontent.com/lerndevops/labs/master/scripts/installCRIDockerd.sh -P /tmp
+        chmod 755 /tmp/installCRIDockerd.sh
+        bash /tmp/installCRIDockerd.sh
+        systemctl restart cri-docker.service
+
+    - name: Install kubeadm, kubelet, kubectl
+      shell: |
+        wget https://raw.githubusercontent.com/lerndevops/labs/master/scripts/installK8S.sh -P /tmp
+        chmod 755 /tmp/installK8S.sh
+        bash /tmp/installK8S.sh
+
+    - name: Enable networking features
+      shell: |
+        modprobe br_netfilter
+        echo 1 > /proc/sys/net/bridge/bridge-nf-call-iptables
+        echo 1 > /proc/sys/net/ipv4/ip_forward
+
+    - name: Validate installations
+      shell: |
+        docker -v
+        cri-dockerd --version
+        kubeadm version -o short
+        kubelet --version
+        kubectl version --client
+
+    - name: Join worker to cluster
+      shell: "sudo {{ hostvars[groups['master'][0]]['kube_join_command'] }}"
