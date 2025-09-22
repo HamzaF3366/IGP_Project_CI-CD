@@ -26,38 +26,26 @@
         apt-get install -y docker-ce docker-ce-cli containerd.io
         usermod -aG docker ubuntu || true
 
-    - name: Ensure Docker service is running and enabled
-      service:
-        name: docker
-        state: started
-        enabled: true
+    - name: add Kubernetes apt repo (pinned to v1.29)
+      shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | gpg --dearmor -o /usr/share/keyrings/kubernetes-archive-keyring.gpg
+        echo "deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
+        apt-get update
+      args:
+        warn: false
 
-    - name: Allow ubuntu user to run docker without sudo
-      user:
-        name: ubuntu
-        groups: docker
-        append: yes
-
-    - name: Reset ssh connection to apply new docker group membership
-      meta: reset_connection
-
-    - name: add Kubernetes apt repo
-      apt_key:
-        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
-        state: present
-
-    - apt_repository:
-        repo: deb https://apt.kubernetes.io/ kubernetes-xenial main
-        state: present
-
-    - name: install kubelet, kubeadm, kubectl
+    - name: install kubelet, kubeadm, kubectl (pinned v1.29.6)
       apt:
-        name: [kubelet, kubeadm, kubectl]
+        name:
+          - kubelet=1.29.6-1.1
+          - kubeadm=1.29.6-1.1
+          - kubectl=1.29.6-1.1
         state: present
         update_cache: yes
 
     - name: hold kube packages
       shell: apt-mark hold kubelet kubeadm kubectl
+
 
 - hosts: master
   become: yes
@@ -84,6 +72,7 @@
 
     - set_fact:
         kube_join: "{{ join_cmd.stdout }}"
+
 
 - hosts: workers
   become: yes
