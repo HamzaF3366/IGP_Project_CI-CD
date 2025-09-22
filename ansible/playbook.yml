@@ -93,17 +93,3 @@
     - name: join worker to cluster
       shell: "{{ hostvars[groups['master'][0]]['kube_join'] }}"
 
-# Optional: separate play to add Jenkins user to Docker on Jenkins server only
-#- hosts: jenkins-server
-#  become: yes
-#  tasks:
-#    - name: Add Jenkins user to docker group
-#      user:
-#        name: jenkins
-        groups: docker
-        append: yes
-
-#    - name: Restart Jenkins to apply docker group membership
-#      systemd:
-        name: jenkins
-        state: restarted
